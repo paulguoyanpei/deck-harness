@@ -1,0 +1,9 @@
+{
+  "name": "ppt-api-compiler",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Runtime dependency for compiling one-shot PPT API output",
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
+}

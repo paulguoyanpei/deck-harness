@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+node_modules/
+runs/
+.libreoffice-profile/
+.xdg-runtime/
+.xdg-config/
+.qa-*/
+.slides-next/
+.slides-old/

@@ -1,0 +1,5 @@
+anthropic>=0.75,<1
+python-pptx>=1.0,<2
+markitdown[pptx]>=0.1.4,<1
+defusedxml>=0.7,<1
+lxml>=5,<7

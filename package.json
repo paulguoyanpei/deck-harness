@@ -1,0 +1,13 @@
+{
+  "name": "claude-code-deepseek-logger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Logging proxy between Claude Code and DeepSeek's Anthropic-compatible endpoint",
+  "main": "logger.js",
+  "scripts": {
+    "start": "node logger.js"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}

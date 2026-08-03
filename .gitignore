@@ -1,0 +1,47 @@
+# --- Secrets / local config ---
+# env.fish holds the DeepSeek API key and endpoint overrides
+env.fish
+.env
+.env.*
+*.local
+
+*.jsonl
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.npm/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Agent run outputs ---
+runs/
+
+# --- LibreOffice / headless rendering scratch (ppt-harness) ---
+.libreoffice-profile/
+.xdg-runtime/
+.xdg-config/
+.qa-*/
+.slides-next/
+.slides-old/
+
+# --- Editor / OS junk ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# --- Generated decks ---
+# The root decks (API.pptx, CC.pptx, harness.pptx) are kept in git as the
+# experiment's output. Uncomment to stop tracking them:
+# /*.pptx
+*.pptx

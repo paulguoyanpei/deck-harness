@@ -1,0 +1,4 @@
+interface:
+  display_name: "PPTX API Generation"
+  short_description: "Generate self-contained PPTX source in one API response"
+  default_prompt: "Use $pptx-api to draft a complete presentation generator from my brief."
