@@ -24,12 +24,20 @@ Paths are relative to this skill's directory. Everything else is plain Python, `
 | `scripts/clean.py unpacked/` | Delete slides, media, and rels no longer referenced. Run **after** `<p:sldIdLst>` is final |
 | `scripts/office/validate.py deck.pptx [--original src.pptx]` | Schema, relationship, content-type, chart and slide checks; each failure names its fix. Pass `--original` for any template-derived deck — it baselines the schema checks against the template, so the template's own XSD errors don't read as yours |
 | `scripts/office/soffice.py --headless --convert-to pdf deck.pptx` | LibreOffice wrapper — bare `soffice` hangs in this sandbox |
+| `scripts/layout_check.py deck.pptx [--waivers deck.layout.json]` | Occlusion, container escape, text overflow, and alignment defects, from shape geometry and font metrics. No rendering, so run it while you build |
 
 ## Creating with pptxgenjs — gotchas
 
 `pptxgenjs` is preinstalled — do not run `npm install` first; write the script and `require('pptxgenjs')` directly. Only if that require fails: `npm install pptxgenjs`. The model knows the API; these are the footguns:
 
 - **Set `pres.layout` before adding slides.** The default canvas is `LAYOUT_16x9` = **10" × 5.625"**, not 13.3" wide. Coordinates past the edge are written, not clamped — the shape just isn't on the slide. (`LAYOUT_WIDE` is 13.3" × 7.5".)
+- **Name every element with `objectName` as you create it.** Use `parent/child` paths so the structure you intend is recorded in the file:
+  ```js
+  s.addShape("roundRect", { ..., objectName: "card1" });        // a container
+  s.addText("标题",        { ..., objectName: "card1/title" });  // sits on card1
+  s.addShape("ellipse",   { ..., objectName: "@bg/blob" });     // background art
+  ```
+  `scripts/layout_check.py` reads these paths to tell deliberate layering (text on a card, a number in a circle) from an accidental collision (two elements that overlap because a coordinate was hand-typed). `@bg/` marks decoration that anything may cover. Elements you leave unnamed fall back to geometric inference, which is noisier — and their warnings cannot be waived. **Retrofitting names onto a finished deck is expensive and unreliable, so write them into the first draft.**
 - **Hex colors: never `#`, never 8 digits.** `color: "FF0000"`. Both `"#FF0000"` and alpha baked into the hex (`"00000020"`) **corrupt the file**. For translucency: `transparency: 0-100` on fills and images, `opacity: 0.0-1.0` on shadows — each is silently ignored on the other.
 - **pptxgenjs mutates option objects in place** (converts values to EMU on first use). Never share one `shadow`/options object across two `add*` calls — build a fresh object each time.
 - **Shadow `offset` must be ≥ 0** — a negative offset corrupts the file. To cast a shadow upward, use `angle: 270` with a positive offset.
@@ -200,7 +208,44 @@ pptxgenjs emits chart XML PowerPoint refuses to open, and every other tool
 accepts: python-pptx opens those decks, LibreOffice renders them, the XSD
 passes them. Every failure names its fix. Fix it in the generator and rebuild.
 
-### Visual QA
+### Layout QA (required)
+
+```bash
+python scripts/layout_check.py output.pptx --waivers deck.layout.json
+```
+
+Reports occlusion, container escape, text overflow, alignment defects, detached
+`flow/` arrows, and severe content imbalance from shape geometry and font metrics.
+It renders nothing, so run it as soon as the first two slides build — not only at
+the end. It catches what the eye misses in a thumbnail: a 0.1" overlap, a footer
+box 0.15" too narrow, a flow arrow that touches only its destination, or one half
+of a content-heavy slide left almost entirely unused.
+
+It is mechanical and narrow. Its balance check catches only severe one-sided empty
+regions; it still cannot judge subtle density, margins, contrast, or type hierarchy.
+A deck can report zero warnings here and still be badly composed. Run the Visual QA
+checklist below after it.
+
+Resolve every warning before you finish. Either fix the layout, or — if an
+overlap is deliberate — record it in `deck.layout.json`, using the line the
+report prints for you:
+
+```json
+{"waivers": [{"slide": 5, "a": "chart/bar3", "b": "chart/callout",
+              "ratio": 0.22, "reason": "callout deliberately marks that bar"}]}
+```
+
+A waiver needs a `reason`, needs both elements named, and holds only while the
+overlap stays within `ratio` + 0.10 — move the element and you are asked to
+confirm again. Overlaps at or above 60% are never waivable; at that point
+something is hidden, not layered.
+
+### Visual QA (required)
+
+These are design standards, not just things to notice in a rendered image. If
+image inspection is unavailable in your environment, apply them as rules while
+you write the generator and read your code against them before you finish.
+Layout QA covers only the first three.
 
 Convert the slides to images (see [Converting to Images](#converting-to-images)) and inspect every one. After staring at the generating code you tend to see what you expect rather than what rendered, so look at the images fresh (a subagent works well for this if you have one). User-visible defects to look for:
 

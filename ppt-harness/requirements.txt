@@ -3,3 +3,4 @@ python-pptx>=1.0,<2
 markitdown[pptx]>=0.1.4,<1
 defusedxml>=0.7,<1
 lxml>=5,<7
+fonttools>=4.50,<5

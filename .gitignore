@@ -1,6 +1,7 @@
 # --- Secrets / local config ---
 # env.fish holds the DeepSeek API key and endpoint overrides
 env.fish
+run.sh
 .env
 .env.*
 *.local

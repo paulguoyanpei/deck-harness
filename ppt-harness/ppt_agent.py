@@ -21,7 +21,7 @@ from typing import Any
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/anthropic"
 DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_MAX_STEPS = 40
+DEFAULT_MAX_STEPS = 50
 DEFAULT_SKILL_PATH = Path(__file__).resolve().parent / "pptx" / "SKILL.md"
 MAX_TOOL_OUTPUT = 30_000
 PLACEHOLDER_RE = re.compile(r"\b(?:TODO|lorem|ipsum)\b|\[insert", re.IGNORECASE)
