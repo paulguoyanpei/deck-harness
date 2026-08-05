@@ -755,7 +755,12 @@ def check_connectors(slide_no, elements):
     for arrow in elements:
         if arrow.background or not arrow.named or not arrow.name.lower().startswith("flow/"):
             continue
-        arrow_type = str(getattr(arrow.shape, "auto_shape_type", "")).split()[0]
+        def _shape_type(sh):
+            try:
+                return str(sh.auto_shape_type).split()[0]
+            except (ValueError, AttributeError):
+                return ""
+        arrow_type = _shape_type(arrow.shape)
         endpoints = directions.get(arrow_type)
         if endpoints is None:
             continue
@@ -763,7 +768,7 @@ def check_connectors(slide_no, elements):
         other_nodes = [
             node for node in elements
             if node.z != arrow.z and not node.background
-            and not str(getattr(node.shape, "auto_shape_type", "")).split()[0].endswith("_ARROW")
+            and not _shape_type(node.shape).endswith("_ARROW")
         ]
         source_attached = any(_point_touches_rect(source, node.rect) for node in other_nodes)
         target_attached = any(_point_touches_rect(target, node.rect) for node in other_nodes)

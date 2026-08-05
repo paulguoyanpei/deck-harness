@@ -152,7 +152,21 @@ Choose colors that match your topic — don't default to generic blue. Use these
 
 - 0.5" minimum margins
 - 0.3-0.5" between content blocks
-- Leave breathing room—don't fill every inch
+- Leave breathing room—don't fill every inch. Breathing room is the *gap between*
+  blocks, though, not slack *inside* them: the two rules below are what keep this
+  one from turning every card into a mostly-empty rectangle.
+- **Size every box to the text it holds.** Padding is deliberate framing; leftover
+  height is a defect. Inside a card, top and bottom padding should be roughly equal
+  and neither much beyond ~0.3", which puts the content at 70-85% of the card's
+  height. A text box should be within about one line of the height its content
+  actually needs. Derive card height from the line count instead of hand-picking one
+  number big enough to cover the longest item — applied uniformly, that number leaves
+  every shorter item visibly hollow.
+- **A text box is not a spacer.** pptxgenjs vertically centres text by default, so an
+  oversized box does not push its content to the top — it floats the text in the
+  middle and opens a halo above *and* below it. That halo is the most common source
+  of "why does this slide look so empty". To move something down, change its `y`;
+  never pad it by giving it a taller box.
 
 ### Avoid (Common Mistakes)
 
@@ -168,7 +182,8 @@ Choose colors that match your topic — don't default to generic blue. Use these
 - **NEVER use accent lines under titles** — these are a hallmark of AI-generated slides; use whitespace or background color instead
 - **NEVER add decorative color bars or accent stripes** — this includes: header/footer bars spanning the slide width, vertical sidebar stripes down one edge of the slide, thin accent stripes along one edge of a card or content block, and "single-side borders" on rectangles. These read as AI-generated filler. If you want to set a card apart, use a subtle background tint, a drop shadow, or an icon — not an edge stripe.
 - **Don't default to cream/beige backgrounds** — when no background is specified, use white (`FFFFFF`) or the user's brand palette; avoid warm-neutral defaults like `F5F5DC`, `FAF0E6`, `FAEBD7`, `FFF8E1`
-- **Don't ship text that overflows its shape** — if text doesn't fit, reduce font size, split across slides, or enlarge the container; never leave content cut off or spilling past bounds
+- **Don't ship text that overflows its shape** — if text doesn't fit, enlarge the container, shorten the copy, or split across slides, in that order; reduce font size only when none of those work, and never below 14pt for body text. Never leave content cut off or spilling past bounds
+- **Don't oversize boxes "just in case"** — a height picked for the longest item you might write, then applied to every item in the row, is the same defect as overflow with the sign flipped. It reads as an unfinished slide, and unlike overflow nothing will flag it for you
 
 ## QA (Required)
 
@@ -226,6 +241,14 @@ regions; it still cannot judge subtle density, margins, contrast, or type hierar
 A deck can report zero warnings here and still be badly composed. Run the Visual QA
 checklist below after it.
 
+**Every check here penalises *too much*; nothing penalises *too little*.** Overflow,
+overlap, container escape, and detached arrows all fire when elements are too big or
+too close. There is no mirror check for a box far taller than its text, or a card
+whose content stops a third of the way down — those pass in silence, and the balance
+check only fires when almost an entire half of the slide is empty. So a zero-warning
+report is evidence that nothing collides. It is not evidence that the slides are well
+filled, and you cannot treat a clean run as permission to stop looking.
+
 Resolve every warning before you finish. Either fix the layout, or — if an
 overlap is deliberate — record it in `deck.layout.json`, using the line the
 report prints for you:
@@ -239,6 +262,28 @@ A waiver needs a `reason`, needs both elements named, and holds only while the
 overlap stays within `ratio` + 0.10 — move the element and you are asked to
 confirm again. Overlaps at or above 60% are never waivable; at that point
 something is hidden, not layered.
+
+**Fix the composition, not the number.** Every warning here is geometric, so for each
+one there is a cheap edit that clears it without improving the slide — and because
+the checks are one-sided, that edit reliably trades a reported defect for an
+unreported one. When you resolve a warning:
+
+- **Don't change the type scale.** You chose font sizes once, for the whole deck; a
+  layout warning is not a reason to revisit them, and shrinking type to buy clearance
+  degrades every slide that shares the scale. Re-flow, re-position, or re-group
+  instead. If a fix seems to *require* a smaller font, the real problem is that the
+  slide is carrying too much — cut content or split the slide.
+- **Don't stretch a container to satisfy a connector or alignment check.** Widening a
+  bar until an arrow's endpoint touches it turns it into a wide box holding one short
+  line — a worse defect than the one you cleared, and an invisible one. Move the
+  arrow, or re-group what it connects.
+- **Don't shrink a box below what its content needs** to clear an overlap, and don't
+  shrink an empty frame around already-fitting text just to separate two rectangles.
+  That silences the check without changing anything a viewer sees. Move one of the two
+  elements instead.
+- **Re-check what you resized.** After changing any container's dimensions, confirm
+  its contents still fill it against the Spacing rules — no check will tell you they
+  don't.
 
 ### Visual QA (required)
 
@@ -254,6 +299,13 @@ Convert the slides to images (see [Converting to Images](#converting-to-images))
 - Source citations or footers colliding with content above
 - Elements too close (< 0.3" gaps) or cards/sections nearly touching
 - Uneven gaps (large empty area in one place, cramped in another)
+- **Text floating in an oversized box — check this second.** A line sitting in the
+  vertical middle of its container with an empty band above *and* below it, a card
+  whose lower third is blank, or a wide bar holding one short centred line. This is
+  the most common defect in a deck built without image inspection, it appears on many
+  slides at once because it comes from the sizing habit rather than one bad
+  coordinate, and no mechanical check reports it.
+- Cards in a row all sized to the longest item, leaving the shorter ones hollow
 - Insufficient margin from slide edges (< 0.5")
 - Columns or similar elements not aligned consistently
 - Low-contrast text (e.g., light gray text on cream-colored background)
