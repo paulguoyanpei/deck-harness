@@ -43,6 +43,22 @@ FATAL_SLIDE_ERRORS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"\}nvGrpSpPr': Missing child element"),
         "a <p:nvGrpSpPr> with no children",
     ),
+    (
+        re.compile(r"\}pPr': This element is not expected\. Expected is \( \{[^}]+\}endParaRPr \)"),
+        "a second <a:pPr> inside one <a:p> (paragraph properties may appear only once)",
+    ),
+    (
+        re.compile(r"\}(?:rPr|endParaRPr|defRPr)', attribute 'sz': \[facet "),
+        'a font size outside 1pt-4000pt — sz is in hundredths of a point, so a '
+        'generator that passes inches or a bare multiplier writes sz="16"',
+    ),
+    # Keep last: the entries above name a specific cause. Anything else that
+    # puts an attribute value outside the schema's own range or pattern is the
+    # same class of defect and PowerPoint rejects it too.
+    (
+        re.compile(r"', attribute '[^']+': \[facet "),
+        "an attribute value outside the range or pattern the schema allows",
+    ),
 )
 
 

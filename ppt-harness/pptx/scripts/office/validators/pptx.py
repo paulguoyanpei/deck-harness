@@ -12,6 +12,11 @@ from .base import BaseSchemaValidator
 
 class PPTXSchemaValidator(BaseSchemaValidator):
 
+    UNIQUE_ID_REQUIREMENTS = {
+        **BaseSchemaValidator.UNIQUE_ID_REQUIREMENTS,
+        "cnvpr": ("id", "file"),
+    }
+
     PRESENTATIONML_NAMESPACE = (
         "http://schemas.openxmlformats.org/presentationml/2006/main"
     )

@@ -15,7 +15,9 @@ A `.pptx` is a ZIP archive of XML files. Choose your approach by task:
 
 ## Scripts
 
-Paths are relative to this skill's directory. Everything else is plain Python, `node`, or shell.
+Paths are relative to this skill's directory. Treat all repository Python code as
+execution-only: never read, search, open, import, or modify any `.py` source file.
+
 
 | Script | What it does |
 |---|---|
@@ -24,25 +26,34 @@ Paths are relative to this skill's directory. Everything else is plain Python, `
 | `scripts/clean.py unpacked/` | Delete slides, media, and rels no longer referenced. Run **after** `<p:sldIdLst>` is final |
 | `scripts/office/validate.py deck.pptx [--original src.pptx]` | Schema, relationship, content-type, chart and slide checks; each failure names its fix. Pass `--original` for any template-derived deck — it baselines the schema checks against the template, so the template's own XSD errors don't read as yours |
 | `scripts/office/soffice.py --headless --convert-to pdf deck.pptx` | LibreOffice wrapper — bare `soffice` hangs in this sandbox |
-| `scripts/layout_check.py deck.pptx [--waivers deck.layout.json]` | Occlusion, container escape, text overflow, and alignment defects, from shape geometry and font metrics. No rendering, so run it while you build |
+| `scripts/layout_check.py deck.pptx` | Occlusion, crowding, text overflow or underfill, alignment defects, and elements that left the backing they declare. From shape geometry and font metrics — no rendering, so run it while you build |
 
 ## Creating with pptxgenjs — gotchas
 
 `pptxgenjs` is preinstalled — do not run `npm install` first; write the script and `require('pptxgenjs')` directly. Only if that require fails: `npm install pptxgenjs`. The model knows the API; these are the footguns:
 
 - **Set `pres.layout` before adding slides.** The default canvas is `LAYOUT_16x9` = **10" × 5.625"**, not 13.3" wide. Coordinates past the edge are written, not clamped — the shape just isn't on the slide. (`LAYOUT_WIDE` is 13.3" × 7.5".)
-- **Name every element with `objectName` as you create it.** Use `parent/child` paths so the structure you intend is recorded in the file:
+- **Name every element with `objectName`, and use the name to declare what it sits on.** An element drawn on a card must be named `<that card's objectName>/<label>`. An element with no `/` in its name is declaring that it sits on the slide itself.
   ```js
-  s.addShape("roundRect", { ..., objectName: "card1" });        // a container
-  s.addText("标题",        { ..., objectName: "card1/title" });  // sits on card1
-  s.addShape("ellipse",   { ..., objectName: "@bg/blob" });     // background art
+  s.addShape("roundRect", { ..., objectName: "points" });        // a card, on the slide
+  s.addText("标题",        { ..., objectName: "points/title" });  // sits on `points`
+  s.addShape("ellipse",   { ..., objectName: "@bg/blob" });      // background art, exempt
   ```
-  `scripts/layout_check.py` reads these paths to tell deliberate layering (text on a card, a number in a circle) from an accidental collision (two elements that overlap because a coordinate was hand-typed). `@bg/` marks decoration that anything may cover. Elements you leave unnamed fall back to geometric inference, which is noisier — and their warnings cannot be waived. **Retrofitting names onto a finished deck is expensive and unreliable, so write them into the first draft.**
+  `scripts/layout_check.py` then checks that each element really is entirely inside the backing it names. This is the one defect geometry cannot find on its own: an element that missed its card is inside nothing, so there is nothing for it to have escaped from, and only your name for it records where it belonged.
+- **The text left of the last `/` must be another element's full `objectName` on the same slide — it is a backing, not a namespace.** `num/4` and `chip/cpu` name backings called `num` and `chip` that were never drawn, so they are reported as `dangling` and *nothing about those elements gets checked*. Two elements on one slide may not share a name, or a backing declared by that name cannot be resolved (`ambiguous`). Both are reported rather than skipped: a check that could not be evaluated has not passed. Names only need to be unique within a slide, so per-slide prefixes like `p5/` are unnecessary — and, being undrawn, would themselves be `dangling`.
+- **A helper that draws onto a card must take the card's name as a parameter.** This is what makes the declaration survive a loop: written once at the call site, it applies to every iteration, including the one that runs past the bottom of the card.
+  ```js
+  function numChip(s, box, n, x, y, d) { ... objectName: box + "/num" + n }
+  rows.forEach((r, i) => numChip(s, "points", i + 1, 0.75, y0 + i * pitch, 0.26));
+  ```
+  A helper that receives only coordinates cannot know which card it is being drawn into, so its elements can never declare a backing — the deck reaches "every element named" while nothing is actually checked.
 - **Hex colors: never `#`, never 8 digits.** `color: "FF0000"`. Both `"#FF0000"` and alpha baked into the hex (`"00000020"`) **corrupt the file**. For translucency: `transparency: 0-100` on fills and images, `opacity: 0.0-1.0` on shadows — each is silently ignored on the other.
 - **pptxgenjs mutates option objects in place** (converts values to EMU on first use). Never share one `shadow`/options object across two `add*` calls — build a fresh object each time.
 - **Shadow `offset` must be ≥ 0** — a negative offset corrupts the file. To cast a shadow upward, use `angle: 270` with a positive offset.
 - **`letterSpacing` is silently ignored** — the real option is `charSpacing`.
+- **`fontSize` and `lineSpacing` are in POINTS, every geometry option (`x`/`y`/`w`/`h`) is in INCHES.** Deriving type size from a shape you sized in inches — `fontSize: d * 0.46` for a `d`-inch chip — writes `sz="16"`, i.e. 0.16pt, and **PowerPoint refuses to open the file**. Multiply by 72: `fontSize: d * 72 * 0.46`. LibreOffice will not catch this for you — it renders the sub-pixel text faithfully, so the glyphs simply vanish from a PDF that still converts, still has the right page count, and still looks non-blank.
 - **Lists:** `bullet: true` on each item, never a literal `•` (renders double bullets). Set `breakLine: true` on every array item except the last. Space bulleted paragraphs with `paraSpaceAfter`, not `lineSpacing` (huge gaps).
+- **Same-line rich text:** the installed pptxgenjs emits a second `<a:pPr>` for two or more runs on one line, and PowerPoint repairs the file. Use one uniformly formatted string or adjacent text boxes; fix the editable deck generator, never `node_modules`.
 - **One `new pptxgen()` per output file** — never reuse an instance.
 - **`rectRadius` only works on `ROUNDED_RECTANGLE`**, not `RECTANGLE`.
 - **Gradient fills aren't supported** — use a gradient image as the background instead.
@@ -58,28 +69,25 @@ Paths are relative to this skill's directory. Everything else is plain Python, `
 
 ## Editing existing decks and templates
 
-Pick layouts first: `python scripts/thumbnail.py template.pptx template-thumbs` writes a labeled grid of every slide and prints the file(s) it created — `template-thumbs.jpg`, split into `template-thumbs-N.jpg` past 12 slides. **Always pass that second argument, named after the deck.** It defaults to `thumbnails`, so two decks thumbnailed in one directory silently overwrite each other's grids — the first deck's are simply gone (template analysis only — visual QA needs the full-resolution renders from [Converting to Images](#converting-to-images); it only accepts `.pptx`, so copy a `.potx` to a `.pptx` name first). Use it with `markitdown` to map each content section onto a template slide, and vary the layouts — don't put every section on the same title-and-bullets slide.
+Pick layouts first: `python scripts/thumbnail.py template.pptx template-thumbs` writes a labeled grid of every slide and prints the file(s) it created — `template-thumbs.jpg`, split into `template-thumbs-N.jpg` past 12 slides. **Always pass that second argument, named after the deck.** It defaults to `thumbnails`, so two decks thumbnailed in one directory silently overwrite each other's grids — the first deck's are simply gone. It only accepts `.pptx`, so copy a `.potx` to a `.pptx` name first. Use it with `markitdown` to map each content section onto a template slide, and vary the layouts — don't put every section on the same title-and-bullets slide.
 
 ```bash
-python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall('unpacked')" deck.pptx
+unzip -q deck.pptx -d unpacked
 python scripts/add_slide.py unpacked/ slide2.xml --after slide2.xml   # duplicate a slide (or slideLayoutN.xml); prints the new slide's path
 # reorder / delete slides = edit <p:sldIdLst> in ppt/presentation.xml
 python scripts/clean.py unpacked/                                     # after deletions: removes orphaned slides, media, rels
 # edit slide content in ppt/slides/slideN.xml
 (cd unpacked && rm -f ../out.pptx && zip -Xr ../out.pptx .)           # zip from INSIDE the dir; rm first or deleted parts survive
-python scripts/office/validate.py out.pptx --original deck.pptx
 ```
 
 - **Do all structural work — add, delete, reorder — before editing any slide's content.** `add_slide.py` copies a slide file verbatim, so duplicating after you edit clones the edited content; and `clean.py` deletes any slide missing from `<p:sldIdLst>`, including one you just wrote.
 - **Never copy a slide file by hand** — `add_slide.py` does every registration a new slide needs and reports what it made (`Created ppt/slides/slide17.xml from slide2.xml`). It also works directly on a file: `add_slide.py deck.pptx slide2.xml -o out.pptx` — **pass `-o`, or it rewrites the input deck in place.** A duplicated slide still *references* its source's chart/SmartArt/embedded-object parts rather than cloning them, so editing one slide's chart changes the other's.
-- **If you use `python-pptx`**, three things it won't do: duplicate a slide (its only entry point is `add_slide(layout)`), preserve formatting through `text_frame.text = "..."` (that collapses the paragraph to a single unstyled run — assign `run.text` instead), or read the SVG/EMF most template art uses (`add_picture` raises `UnidentifiedImageError`).
 - Legacy `.ppt` must be converted first: `python scripts/office/soffice.py --headless --convert-to pptx file.ppt`. `.potx` templates unpack and pack identically — keep the `.potx` extension on the output.
 - To reuse a template icon or image, duplicate a slide or layout that already contains it.
 
 When filling in a template:
 
-- If you script an XML transform, parse with `defusedxml.minidom` — round-tripping OOXML through `xml.etree.ElementTree` rewrites namespace prefixes and corrupts the deck.
-- **Template slots ≠ source items.** If the template shows 4 team members and you have 3, delete the 4th member's entire group (image + text boxes), not just its text — then check for orphaned visuals in QA.
+- **Template slots ≠ source items.** If the template shows 4 team members and you have 3, delete the 4th member's entire group (image + text boxes), not just its text.
 - One `<a:p>` per list item — never concatenate items into a single paragraph. Copy the sibling `<a:pPr>` to preserve spacing, and put `b="1"` on the `<a:rPr>` of titles, section headers, and inline labels (`Status:`, `Owner:`).
 - Let bullets inherit from the layout; only add `<a:buChar>`, `<a:buAutoNum>` (numbered), or `<a:buNone>` to override — never a literal `•` in the text.
 - Text with leading or trailing spaces needs `xml:space="preserve"` on its `<a:t>`.
@@ -183,152 +191,37 @@ Choose colors that match your topic — don't default to generic blue. Use these
 - **NEVER add decorative color bars or accent stripes** — this includes: header/footer bars spanning the slide width, vertical sidebar stripes down one edge of the slide, thin accent stripes along one edge of a card or content block, and "single-side borders" on rectangles. These read as AI-generated filler. If you want to set a card apart, use a subtle background tint, a drop shadow, or an icon — not an edge stripe.
 - **Don't default to cream/beige backgrounds** — when no background is specified, use white (`FFFFFF`) or the user's brand palette; avoid warm-neutral defaults like `F5F5DC`, `FAF0E6`, `FAEBD7`, `FFF8E1`
 - **Don't ship text that overflows its shape** — if text doesn't fit, enlarge the container, shorten the copy, or split across slides, in that order; reduce font size only when none of those work, and never below 14pt for body text. Never leave content cut off or spilling past bounds
-- **Don't oversize boxes "just in case"** — a height picked for the longest item you might write, then applied to every item in the row, is the same defect as overflow with the sign flipped. It reads as an unfinished slide, and unlike overflow nothing will flag it for you
+- **Don't oversize boxes "just in case"** — a height picked for the longest item you might write, then applied to every item in the row, is the same defect as overflow with the sign flipped. It reads as an unfinished slide and should trigger an underfill warning
 
-## QA (Required)
+## File validation
 
-Your first render usually has a few real issues — overlaps, overflow, misalignment. Find and fix those, re-render only the slides you changed, and stop.
-
-### Content QA
-
-```bash
-markitdown output.pptx
-```
-
-Check for missing content, typos, wrong order.
-
-**When using templates, check for leftover placeholder text:**
+After writing or rebuilding the candidate deck, run the validator as an opaque
+utility. Use `--original` for a template-derived deck:
 
 ```bash
-markitdown output.pptx | grep -iE "\bx{3,}\b|lorem|ipsum|\bTODO|\[insert|this.*(page|slide).*layout"
+python scripts/office/validate.py output.pptx
+python scripts/office/validate.py output.pptx --original source.pptx
 ```
 
-If grep returns results, fix them before declaring success.
+Run only the command that matches the task. A validation failure means PowerPoint
+may reject or repair the file: fix the editable generator or source document, rebuild,
+and rerun validation. Do not inspect or modify the validator's Python source.
 
-### File QA (required)
+## Layout check
 
 ```bash
-python scripts/office/validate.py output.pptx                      # built from scratch
-python scripts/office/validate.py output.pptx --original src.pptx  # built from a template
+python scripts/layout_check.py output.pptx
 ```
 
-**If the deck came from a template, always pass `--original`.** A template may itself
-contain parts the XSD rejects, so a bare run can report failures you never caused — and
-a genuine regression can hide among them. `--original` baselines
-the schema and slide checks against the template, suppressing errors it already had.
-The structural checks — relationships, content types, charts — ignore `--original` and
-report template-inherited problems either way, so read those on their own merits.
+This reads PPTX geometry and font metrics directly; it does not render images. It
+reports overlap, clearance, text overflow or underfill, alignment, and severe content
+imbalance. Run it after writing the candidate deck and again after layout fixes.
 
-pptxgenjs emits chart XML PowerPoint refuses to open, and every other tool
-accepts: python-pptx opens those decks, LibreOffice renders them, the XSD
-passes them. Every failure names its fix. Fix it in the generator and rebuild.
-
-### Layout QA (required)
-
-```bash
-python scripts/layout_check.py output.pptx --waivers deck.layout.json
-```
-
-Reports occlusion, container escape, text overflow, alignment defects, detached
-`flow/` arrows, and severe content imbalance from shape geometry and font metrics.
-It renders nothing, so run it as soon as the first two slides build — not only at
-the end. It catches what the eye misses in a thumbnail: a 0.1" overlap, a footer
-box 0.15" too narrow, a flow arrow that touches only its destination, or one half
-of a content-heavy slide left almost entirely unused.
-
-It is mechanical and narrow. Its balance check catches only severe one-sided empty
-regions; it still cannot judge subtle density, margins, contrast, or type hierarchy.
-A deck can report zero warnings here and still be badly composed. Run the Visual QA
-checklist below after it.
-
-**Every check here penalises *too much*; nothing penalises *too little*.** Overflow,
-overlap, container escape, and detached arrows all fire when elements are too big or
-too close. There is no mirror check for a box far taller than its text, or a card
-whose content stops a third of the way down — those pass in silence, and the balance
-check only fires when almost an entire half of the slide is empty. So a zero-warning
-report is evidence that nothing collides. It is not evidence that the slides are well
-filled, and you cannot treat a clean run as permission to stop looking.
-
-Resolve every warning before you finish. Either fix the layout, or — if an
-overlap is deliberate — record it in `deck.layout.json`, using the line the
-report prints for you:
-
-```json
-{"waivers": [{"slide": 5, "a": "chart/bar3", "b": "chart/callout",
-              "ratio": 0.22, "reason": "callout deliberately marks that bar"}]}
-```
-
-A waiver needs a `reason`, needs both elements named, and holds only while the
-overlap stays within `ratio` + 0.10 — move the element and you are asked to
-confirm again. Overlaps at or above 60% are never waivable; at that point
-something is hidden, not layered.
-
-**Fix the composition, not the number.** Every warning here is geometric, so for each
-one there is a cheap edit that clears it without improving the slide — and because
-the checks are one-sided, that edit reliably trades a reported defect for an
-unreported one. When you resolve a warning:
-
-- **Don't change the type scale.** You chose font sizes once, for the whole deck; a
-  layout warning is not a reason to revisit them, and shrinking type to buy clearance
-  degrades every slide that shares the scale. Re-flow, re-position, or re-group
-  instead. If a fix seems to *require* a smaller font, the real problem is that the
-  slide is carrying too much — cut content or split the slide.
-- **Don't stretch a container to satisfy a connector or alignment check.** Widening a
-  bar until an arrow's endpoint touches it turns it into a wide box holding one short
-  line — a worse defect than the one you cleared, and an invisible one. Move the
-  arrow, or re-group what it connects.
-- **Don't shrink a box below what its content needs** to clear an overlap, and don't
-  shrink an empty frame around already-fitting text just to separate two rectangles.
-  That silences the check without changing anything a viewer sees. Move one of the two
-  elements instead.
-- **Re-check what you resized.** After changing any container's dimensions, confirm
-  its contents still fill it against the Spacing rules — no check will tell you they
-  don't.
-
-### Visual QA (required)
-
-These are design standards, not just things to notice in a rendered image. If
-image inspection is unavailable in your environment, apply them as rules while
-you write the generator and read your code against them before you finish.
-Layout QA covers only the first three.
-
-Convert the slides to images (see [Converting to Images](#converting-to-images)) and inspect every one. After staring at the generating code you tend to see what you expect rather than what rendered, so look at the images fresh (a subagent works well for this if you have one). User-visible defects to look for:
-
-- **Text overflow or text cut off at a box or slide boundary — check this first.** It is the most common defect and always user-visible. (For a font the previewer renders unreliably per Typography, the preview is approximate: trust the ~10% slack you left, not its apparent fit.)
-- Overlapping elements (text through shapes, lines through words, stacked elements)
-- Source citations or footers colliding with content above
-- Elements too close (< 0.3" gaps) or cards/sections nearly touching
-- Uneven gaps (large empty area in one place, cramped in another)
-- **Text floating in an oversized box — check this second.** A line sitting in the
-  vertical middle of its container with an empty band above *and* below it, a card
-  whose lower third is blank, or a wide bar holding one short centred line. This is
-  the most common defect in a deck built without image inspection, it appears on many
-  slides at once because it comes from the sizing habit rather than one bad
-  coordinate, and no mechanical check reports it.
-- Cards in a row all sized to the longest item, leaving the shorter ones hollow
-- Insufficient margin from slide edges (< 0.5")
-- Columns or similar elements not aligned consistently
-- Low-contrast text (e.g., light gray text on cream-colored background)
-- Template decoration mispositioned after text replacement — e.g., a title underline positioned for one line, but the replaced title wrapped to two
-- Low-contrast icons (e.g., dark icons on dark backgrounds without a contrasting circle)
-- Text boxes too narrow causing excessive wrapping
-- Leftover placeholder content
-
-## Converting to Images
-
-Convert presentations to individual slide images for visual inspection:
-
-```bash
-python scripts/office/soffice.py --headless --convert-to pdf output.pptx
-rm -f slide-*.jpg
-pdftoppm -jpeg -r 150 output.pdf slide
-ls -1 "$PWD"/slide-*.jpg
-```
-
-**Pass the absolute paths printed above directly to the view tool.** The `rm` clears stale images from prior runs. `pdftoppm` zero-pads based on page count: `slide-1.jpg` for decks under 10 pages, `slide-01.jpg` for 10-99, `slide-001.jpg` for 100+.
-
-**After fixes, rerun all four commands above** — the PDF must be regenerated from the edited `.pptx` before `pdftoppm` can reflect your changes.
+The output is advisory. Review every warning, follow its `HINT`, and fix real defects
+in the editable generator or source document. If a warning is only a measurement
+artefact, leave the layout unchanged and explain why in the final response. Never
+silence a warning by editing the checker or third-party code.
 
 ## Dependencies
 
-`pptxgenjs` (npm, preinstalled — install only if `require('pptxgenjs')` fails) · `markitdown[pptx]`, `Pillow`, `defusedxml`, `lxml` (pip — text dump, thumbnail, clean, validate) · LibreOffice (`soffice`, auto-configured for sandboxed environments via `scripts/office/soffice.py`) · `pdftoppm` (Poppler)
+`pptxgenjs` (npm, preinstalled — install only if `require('pptxgenjs')` fails) · `markitdown[pptx]`, `Pillow`, `lxml` (pip — text dump, thumbnail, clean, validate) · LibreOffice (`soffice`, auto-configured for sandboxed environments via `scripts/office/soffice.py`) · `pdftoppm` (Poppler)

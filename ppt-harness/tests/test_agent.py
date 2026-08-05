@@ -16,9 +16,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.append(str(ROOT / "pptx" / "scripts"))
+sys.path.append(str(ROOT / "pptx" / "scripts" / "office"))
 
 import layout_check  # noqa: E402
 import ppt_agent  # noqa: E402
+from validators.pptx import PPTXSchemaValidator  # noqa: E402
 
 
 class FakeMessages:
@@ -114,6 +116,23 @@ class ToolRunnerTests(unittest.TestCase):
         result = self.runner.bash("python3 -c 'print(\"x\" * 40000)'")
         self.assertLessEqual(len(result.stdout), ppt_agent.MAX_TOOL_OUTPUT + 100)
         self.assertIn("chars omitted", result.stdout)
+
+
+class OfficeValidatorTests(unittest.TestCase):
+    def test_duplicate_cnvpr_ids_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            slide = Path(temp) / "ppt" / "slides" / "slide1.xml"
+            slide.parent.mkdir(parents=True)
+            slide.write_text(
+                '<p:sld xmlns:p="urn:p"><p:cNvPr id="11" name="table"/>'
+                '<p:cNvPr id="11" name="icon"/></p:sld>',
+                encoding="utf-8",
+            )
+            with patch("sys.stdout", new=io.StringIO()) as out:
+                valid = PPTXSchemaValidator(temp).validate_unique_ids()
+
+        self.assertFalse(valid)
+        self.assertIn("Duplicate id='11' in <cnvpr>", out.getvalue())
 
 
 class AgentLoopTests(unittest.TestCase):
@@ -257,6 +276,7 @@ class ContentBalanceTests(unittest.TestCase):
 
             self.assertFalse(passed)
             self.assertIn("FAIL  slide 1: right body", detail)
+            self.assertIn("Redistribute or resize existing content", detail)
 
 
 @unittest.skipUnless(
@@ -355,15 +375,9 @@ class LayoutCheckTests(unittest.TestCase):
                 run.font.name = font
         return box
 
-    def _report(self, build, waivers=None) -> str:
+    def _report(self, build) -> str:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            pptx = self._deck(root, build)
-            waivers_path = None
-            if waivers is not None:
-                waivers_path = root / "deck.layout.json"
-                waivers_path.write_text(json.dumps(waivers), encoding="utf-8")
-            return layout_check.analyse(str(pptx), waivers_path)
+            return layout_check.analyse(str(self._deck(Path(temp), build)))
 
     # -- tree building ----------------------------------------------------
 
@@ -409,13 +423,44 @@ class LayoutCheckTests(unittest.TestCase):
 
         report = self._report(build)
         self.assertIn("row/dot × row/pill", report)
-        self.assertIn("71% covered", report)
-        self.assertIn("[not waivable]", report)
+        self.assertIn("overlapping, move 0.10in to clear", report)
 
-    def test_abutting_edges_are_not_an_overlap(self):
+    def test_severity_is_how_far_something_must_move(self):
+        # A hairline overlap is a nudge; a buried element is severe. Coverage
+        # ratio cannot tell those apart -- it calls both of these ~100%.
+        def build(slide):
+            self._shape(slide, "a", 1.0, 1.0, 2.0, 1.0)
+            self._shape(slide, "a2", 2.97, 1.0, 2.0, 1.0)    # 0.03in overlap
+            self._shape(slide, "b", 1.0, 3.0, 2.0, 1.0)
+            self._shape(slide, "b2", 2.0, 3.0, 2.0, 1.0)     # 1.00in overlap
+
+        report = self._report(build)
+        self.assertIn("move 0.03in to clear", report)
+        self.assertNotIn("move 0.03in to clear  [severe]", report)
+        self.assertIn("move 1.00in to clear  [severe]", report)
+
+    def test_abutting_edges_must_still_stand_clear(self):
+        # Under the binary rule a 0.02in sliver is no longer waved through as
+        # "merely abutting" -- elements either nest or keep their distance.
         def build(slide):
             self._shape(slide, "a", 1, 1, 2, 1.0)
             self._shape(slide, "b", 1, 1.98, 2, 1.0)   # 0.02in sliver
+
+        self.assertIn("WARN  overlap", self._report(build))
+
+    def test_elements_merely_close_are_reported_as_clearance(self):
+        def build(slide):
+            self._shape(slide, "a", 1, 1, 2, 1.0)
+            self._shape(slide, "b", 3.03, 1, 2, 1.0)   # 0.03in apart
+
+        report = self._report(build)
+        self.assertIn("WARN  clearance", report)
+        self.assertIn("0.03in apart, needs 0.05in", report)
+
+    def test_elements_a_clear_gap_apart_pass(self):
+        def build(slide):
+            self._shape(slide, "a", 1, 1, 2, 1.0)
+            self._shape(slide, "b", 3.08, 1, 2, 1.0)   # 0.08in apart
 
         self.assertIn("0 warnings", self._report(build))
 
@@ -430,13 +475,26 @@ class LayoutCheckTests(unittest.TestCase):
 
     # -- escape, fit, center, baseline ------------------------------------
 
-    def test_child_escaping_its_parent_is_reported(self):
+    def test_text_escaping_its_parent_is_an_overlap(self):
+        # There is no separate escape check: hanging off a parent's edge is
+        # simply a pair that neither nests nor stands clear.
         def build(slide):
             self._shape(slide, "card", 0.5, 0.5, 2, 1)
-            self._text(slide, "card/wide", 0.7, 0.7, 3, 0.4, "too wide")
+            self._text(slide, "card/wide", 0.7, 0.7, 3, 0.4,
+                       "text far too long to stay inside")
 
-        self.assertIn("sticks", self._report(build))
-        self.assertIn("outside card", self._report(build))
+        report = self._report(build)
+        self.assertIn("WARN  overlap", report)
+        self.assertIn("card", report)
+
+    def test_a_loose_frame_hanging_out_is_not_an_escape(self):
+        # The frame runs 1.2in past the card, but the glyphs stop well inside
+        # it. Judging the frame reported this; judging the ink does not.
+        def build(slide):
+            self._shape(slide, "card", 0.5, 0.5, 2, 1)
+            self._text(slide, "card/short", 0.7, 0.7, 3, 0.4, "short")
+
+        self.assertIn("0 warnings", self._report(build))
 
     def test_text_too_wide_for_its_box_is_reported(self):
         # The page-number defect: 0.5in box minus 0.2in of insets holds 0.30in.
@@ -454,6 +512,43 @@ class LayoutCheckTests(unittest.TestCase):
                        "02 / 10", size=9, font="Microsoft YaHei", wrap=True)
 
         self.assertIn("0 warnings", self._report(build))
+
+    def test_tall_top_anchored_text_box_is_reported_as_underfilled(self):
+        def build(slide):
+            self._text(slide, "card/desc", 1, 1, 4, 1.4,
+                       "A short body paragraph leaves most of this tall frame empty.",
+                       size=12, wrap=True)
+
+        report = self._report(build)
+        self.assertIn("WARN  underfill", report)
+        self.assertIn("expected at least 40%", report)
+        self.assertIn("Increase the font size or add more text content", report)
+        self.assertIn("peer boxes in the same group", report)
+
+    def test_middle_anchored_banner_is_not_reported_as_underfilled(self):
+        from pptx.enum.text import MSO_ANCHOR
+
+        def build(slide):
+            box = self._text(slide, "takeaway/text", 1, 1, 8, 1.4,
+                             "A deliberately centred takeaway banner has spare space.",
+                             size=12, wrap=True)
+            box.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+        self.assertNotIn("WARN  underfill", self._report(build))
+
+    def test_centred_text_is_not_measured_against_the_backdrop(self):
+        # Parents are geometric now, so anything not nested in a card lands on
+        # the full-slide background. A bottom caption is horizontally centred
+        # and vertically nowhere near the slide's middle -- by design.
+        from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+
+        def build(slide):
+            self._shape(slide, "@bg/slide-bg", 0, 0, 10, 5.625)
+            box = self._text(slide, "caption", 1.0, 4.8, 8.0, 0.4, "a bottom note")
+            box.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+            box.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+
+        self.assertNotIn("WARN  center", self._report(build))
 
     def test_centred_text_off_its_shape_centre_is_reported(self):
         # The badge defect: circle at y=0.64, its label at y=0.62.
@@ -483,103 +578,28 @@ class LayoutCheckTests(unittest.TestCase):
         self.assertIn("WARN  baseline", report)
         self.assertIn("share a row", report)
 
-    def test_flow_arrow_with_detached_source_is_reported(self):
-        from pptx.enum.shapes import MSO_SHAPE
-        from pptx.util import Inches
-
-        def build(slide):
-            self._shape(slide, "flow/source", 4, 0.5, 2, 1)
-            self._shape(slide, "flow/target", 1, 2.5, 2, 1)
-            arrow = slide.shapes.add_shape(
-                MSO_SHAPE.DOWN_ARROW, Inches(1.85), Inches(2.0), Inches(0.3), Inches(0.5)
-            )
-            arrow.name = "flow/arrow"
-
-        report = self._report(build)
-        self.assertIn("WARN  connector", report)
-        self.assertIn("detached source endpoint", report)
-
-    def test_flow_arrow_attached_at_both_ends_is_not_reported(self):
-        from pptx.enum.shapes import MSO_SHAPE
-        from pptx.util import Inches
-
-        def build(slide):
-            self._shape(slide, "flow/source", 1, 0.5, 2, 1)
-            self._shape(slide, "flow/target", 1, 2.0, 2, 1)
-            arrow = slide.shapes.add_shape(
-                MSO_SHAPE.DOWN_ARROW, Inches(1.85), Inches(1.5), Inches(0.3), Inches(0.5)
-            )
-            arrow.name = "flow/arrow"
-
-        self.assertNotIn("WARN  connector", self._report(build))
-
-    # -- waivers ----------------------------------------------------------
+    # -- reporting --------------------------------------------------------
 
     def _overlapping_pair(self, slide):
         self._shape(slide, "chart/bar", 5.0, 0.5, 1.0, 2.0)
         self._shape(slide, "chart/callout", 5.5, 0.5, 2.0, 0.5)
 
-    def test_waiver_silences_a_matching_overlap(self):
-        report = self._report(self._overlapping_pair, waivers={"waivers": [
-            {"slide": 1, "a": "chart/bar", "b": "chart/callout",
-             "ratio": 0.25, "reason": "callout marks the bar"},
-        ]})
-        self.assertNotIn("WARN  overlap", report)
-        self.assertIn("1 waived", report)
+    def test_nothing_can_silence_an_overlap(self):
+        # Overlaps are cleared by moving or re-parenting an element. There is no
+        # waiver file, so the report never offers a way to record one.
+        report = self._report(self._overlapping_pair)
+        self.assertIn("WARN  overlap", report)
+        self.assertNotIn("waive", report)
 
-    def test_waiver_order_of_names_does_not_matter(self):
-        report = self._report(self._overlapping_pair, waivers={"waivers": [
-            {"slide": 1, "a": "chart/callout", "b": "chart/bar",
-             "ratio": 0.25, "reason": "callout marks the bar"},
-        ]})
-        self.assertIn("1 waived", report)
-
-    def test_waiver_expires_when_the_overlap_grows(self):
-        report = self._report(self._overlapping_pair, waivers={"waivers": [
-            {"slide": 1, "a": "chart/bar", "b": "chart/callout",
-             "ratio": 0.05, "reason": "callout marks the bar"},
-        ]})
-        self.assertIn("waiver expired: confirmed at 5%, now 25%", report)
-
-    def test_waiver_without_a_reason_is_refused(self):
-        report = self._report(self._overlapping_pair, waivers={"waivers": [
-            {"slide": 1, "a": "chart/bar", "b": "chart/callout", "ratio": 0.25},
-        ]})
-        self.assertIn("waiver has no reason", report)
-
-    def test_severe_overlap_cannot_be_waived(self):
+    def test_a_parent_path_no_longer_excuses_an_overlap(self):
+        # Naming used to exempt a declared child from the occlusion check. It
+        # buys nothing now -- only the geometry counts.
         def build(slide):
-            self._shape(slide, "dot", 0.6, 3.0, 0.4, 0.4)
-            self._shape(slide, "pill", 0.65, 2.9, 3.0, 0.6)
+            self._shape(slide, "chart/bar", 5.0, 0.5, 1.0, 2.0)
+            self._shape(slide, "chart/bar/callout", 5.5, 0.5, 2.0, 0.5)
 
-        report = self._report(build, waivers={"waivers": [
-            {"slide": 1, "a": "dot", "b": "pill", "ratio": 0.9, "reason": "deliberate"},
-        ]})
-        self.assertIn("cannot be waived", report)
-        self.assertIn("[not waivable]", report)
+        self.assertIn("WARN  overlap", self._report(build))
 
-    def test_waiver_requires_both_elements_to_be_named(self):
-        def build(slide):
-            self._shape(slide, "Shape 0", 1.0, 1.0, 1.0, 2.0)
-            self._shape(slide, "Shape 1", 1.5, 1.0, 2.0, 0.5)
-
-        report = self._report(build, waivers={"waivers": [
-            {"slide": 1, "a": "Shape 0", "b": "Shape 1", "ratio": 0.25, "reason": "x"},
-        ]})
-        self.assertIn("waivers require both elements to be named", report)
-
-    def test_malformed_waiver_file_does_not_stop_the_run(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            pptx = self._deck(root, self._overlapping_pair)
-            waivers = root / "deck.layout.json"
-            waivers.write_text("not json", encoding="utf-8")
-            with patch("sys.stderr", new=io.StringIO()) as err:
-                report = layout_check.analyse(str(pptx), waivers)
-            self.assertIn("WARN  overlap", report)
-            self.assertIn("deck.layout.json", err.getvalue())
-
-    # -- reporting --------------------------------------------------------
 
     def test_naming_coverage_is_reported(self):
         def build(slide):
@@ -607,6 +627,13 @@ class LayoutCheckTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("WARN  overlap", out.getvalue())
 
+    def test_every_check_kind_has_a_repair_hint(self):
+        self.assertEqual(
+            {"overlap", "clearance", "fit", "leading", "center", "baseline",
+             "balance", "underfill"},
+            set(layout_check.CHECK_HINTS),
+        )
+
 
 class SkillDocumentTests(unittest.TestCase):
     """The layout check is documented in the bundled skill, not only in code."""
@@ -626,8 +653,6 @@ class SkillDocumentTests(unittest.TestCase):
         self.assertIn("scripts/layout_check.py", self.skill)
         self.assertIn("objectName", self.skill)
         self.assertIn("@bg/", self.skill)
-        self.assertIn("deck.layout.json", self.skill)
-
 
 if __name__ == "__main__":
     unittest.main()

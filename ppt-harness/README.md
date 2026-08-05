@@ -74,7 +74,6 @@ Each run keeps its source and audit trail together:
 runs/demo/
 ├── deck.py or deck.js
 ├── deck.pptx
-├── deck.layout.json   (only if the model waived a deliberate overlap)
 ├── deck.pdf
 ├── preview.jpg
 ├── qa.txt
@@ -101,11 +100,40 @@ verification instead of an advisory layout report.
 ## Layout QA
 
 `pptx/scripts/layout_check.py` finds the defects a text-only model cannot see:
-one element covering another, text escaping its container, text too wide for its
-box, elements that should share a centreline but don't, and detached named flow
-arrows. It reads shape coordinates and font metrics — nothing is rendered, so the
-model runs it while it builds rather than only at the end. Cardinal arrows named
-under `flow/` must touch another node at both endpoints.
+one element covering another, elements crowded against each other, text too wide
+for its box, and elements that should share a centreline but don't. It reads
+shape coordinates and font metrics — nothing is
+rendered, so the model runs it while it builds rather than only at the end.
+
+### The rule
+
+Any two elements must either **nest completely** or **stand 0.05" apart**.
+A partial overlap is a defect, and so is a hairline gap. There is no third
+category and no way to declare an exception, so every warning means something
+has to move.
+
+Elements are judged by the cells they ink rather than by their bounding boxes.
+Each slide is rasterised onto a 0.01" grid and every shape becomes a bitmask, so
+an ellipse is an ellipse and a label is its lines of text, not the loose frame
+around them — a text frame may hang well outside its card without complaint as
+long as the glyphs stay inside. Distances are Chebyshev, so two elements offset
+diagonally need only clear each other on one axis.
+
+Severity is the distance something must move: a 0.03" overlap is a nudge, a 1"
+overlap means an element is buried. Coverage ratio cannot tell those apart — it
+calls both of them nearly 100%.
+
+Lines and rules take no part in this. A stroke has no interior, and chained
+polyline segments have to meet, so they are excluded from both halves of the
+rule.
+
+The rule is strict on purpose, but the output is advisory. It measures geometry and
+never sees a rendering — a chart is one solid rectangle to it, a rotated element is
+judged by its unrotated box, line breaking is estimated rather than laid out — so a
+warning marks a place to look, not a proven defect. The skill asks the model to
+account for every warning, by fixing it or by saying in its final report why it
+didn't, and gives it no way to suppress one. That is why removing waivers cost
+nothing: a waiver file is only necessary when the output is treated as a verdict.
 
 ```bash
 python3 pptx/scripts/layout_check.py runs/demo/deck.pptx
@@ -116,33 +144,23 @@ run it, so `grep layout_check runs/<name>/run.jsonl` is how you check that it di
 
 ### Naming
 
-The check is far sharper when the generator names what it creates, via pptxgenjs
-`objectName`:
+Names no longer affect any verdict. `parent/child` paths once declared that an
+overlap was intentional, and a waiver file could excuse the rest; both are gone,
+because the geometry already says everything the paths were claiming. What a name
+buys now is a readable report — `card1/title` beats `Shape 7` when you are
+reading a warning — plus one special case:
 
 ```js
-s.addShape("roundRect", { ..., objectName: "card1" });        // a container
-s.addText("标题",        { ..., objectName: "card1/title" });  // sits on card1
-s.addShape("ellipse",   { ..., objectName: "@bg/blob" });     // background art
+s.addText("标题",       { ..., objectName: "card1/title" });  // just a label
+s.addShape("ellipse",  { ..., objectName: "@bg/blob" });     // background art
 ```
 
-Paths declare intent: an element may overlap its own ancestors, and `@bg/` art may
-be covered by anything, but two unrelated elements may not overlap. Unnamed
-elements fall back to geometric inference — it still finds real defects, just with
-more noise, and their warnings cannot be waived. Every report prints the naming
-coverage per slide, because a clean result means much less on an unnamed deck.
+`@bg` marks decoration that anything may cover. That is the only prefix the check
+reads.
 
-### Waivers
-
-Deliberate overlaps go in `deck.layout.json`, in the form the report prints:
-
-```json
-{"waivers": [{"slide": 5, "a": "chart/bar3", "b": "chart/callout",
-              "ratio": 0.22, "reason": "callout deliberately marks that bar"}]}
-```
-
-A waiver needs a reason, needs both elements named, and holds only while the
-overlap stays within `ratio` + 0.10 — move the element and it must be confirmed
-again. Overlaps at or above 60% are never waivable.
+The cost of dropping the escape hatches is real: a deliberate partial overlap — a
+badge straddling a card's corner, a callout hanging over the bar it marks — can no
+longer be expressed at all, and has to be redrawn as a nested or a separated pair.
 
 ### Fonts
 
